@@ -76,7 +76,7 @@ Every app gets a fully isolated environment. **Laravel** (default): zero-downtim
 | **Web server**     | Nginx reverse proxy with per-app virtual hosts — PHP-FPM or Octane (`proxy_pass`), optimized for Laravel     |
 | **PHP & Composer** | Selectable per app — PHP 7.4 to 8.5, hot-swappable                                                           |
 | **Runtime**        | PHP-FPM pools by default; optional **Laravel Octane (FrankenPHP)** per app (`--octane`)                      |
-| **Database**       | MariaDB (default) + optional PostgreSQL; dedicated DB and user per Laravel app                               |
+| **Database**       | MySQL (default) + optional PostgreSQL; dedicated DB and user per Laravel app                               |
 | **Search**         | Optional **Meilisearch** for Laravel Scout — native binary, loopback only, per-app scoped key + index prefix  |
 | **Queue workers**  | Supervisor with per-app pools — `queue:work` or **Horizon**; optional **Reverb** for WebSockets (wss:// + credentials + fd limits) |
 | **Deployments**    | Deployer — Laravel: atomic symlink, 5 releases, rollback, optional Node build; Custom: clone into htdocs     |
@@ -104,11 +104,11 @@ cipi zt enable          # Cloudflare Zero Trust: tunnel + real_ip, ports stay op
 cipi scan enable        # nightly: release integrity + ClamAV on uploads
 ```
 
-Ubuntu security updates land daily via `unattended-upgrades`. PHP patch releases are applied every Sunday by `cipi php upgrade`. **Nginx, MariaDB, PostgreSQL and Valkey are left alone until you ask** — restarting a database at 04:00 is not a surprise Cipi will create:
+Ubuntu security updates land daily via `unattended-upgrades`. PHP patch releases are applied every Sunday by `cipi php upgrade`. **Nginx, MySQL, PostgreSQL and Valkey are left alone until you ask** — restarting a database at 04:00 is not a surprise Cipi will create:
 
 ```bash
 cipi nginx upgrade                 # nginx.org mainline, config test, reload
-cipi db upgrade                    # MariaDB, and PostgreSQL if installed
+cipi db upgrade                    # MySQL, and PostgreSQL if installed
 cipi db upgrade pgsql --yes
 cipi service upgrade valkey
 ```
@@ -262,7 +262,7 @@ cipi health set myapp --url=https://example.com/up --expect=200
 
 ### 📟 System Monitor & Chat Alerts
 
-`cipi health` watches your apps; **`cipi monitor`** watches the server itself. Every 5 minutes it checks disk usage, SSL certificate expiry, system services (nginx, MariaDB, PHP-FPM, …), queue workers and Horizon, HTTP 5xx spikes in the access logs, read-only filesystems, and load average. Alerts fire on state changes only — one message when something breaks, one when it recovers, and a quiet reminder every 4 hours while it stays broken. No dashboards, no metrics storage: just a message when it matters.
+`cipi health` watches your apps; **`cipi monitor`** watches the server itself. Every 5 minutes it checks disk usage, SSL certificate expiry, system services (nginx, MySQL, PHP-FPM, …), queue workers and Horizon, HTTP 5xx spikes in the access logs, read-only filesystems, and load average. Alerts fire on state changes only — one message when something breaks, one when it recovers, and a quiet reminder every 4 hours while it stays broken. No dashboards, no metrics storage: just a message when it matters.
 
 ```bash
 cipi monitor                      # run all checks now
