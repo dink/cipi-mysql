@@ -11,7 +11,7 @@ set -e
 set -o pipefail
 
 REPO="dink/cipi-mysql"
-BRANCH="${1:-latest}"
+BRANCH=master
 BUILD=""  # resolved from version.md after git clone in install_cipi()
 
 CIPI_LIB="/opt/cipi/lib"
