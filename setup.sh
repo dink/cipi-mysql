@@ -598,7 +598,7 @@ install_mysql() {
 
     # Secure installation & configure root authentication for MySQL 8
     mysql --protocol=socket -u root <<SQL
-ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '${DB_ROOT_PASS}';
+ALTER USER 'root'@'localhost' IDENTIFIED WITH caching_sha2_password BY '${DB_ROOT_PASS}';
 DELETE FROM mysql.user WHERE User='';
 DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
 DROP DATABASE IF EXISTS test;
@@ -618,6 +618,7 @@ SQL
     cat > /etc/mysql/mysql.conf.d/99-cipi.cnf <<CNFEOF
 [mysqld]
 bind-address = 127.0.0.1
+mysql_native_password = ON
 innodb_buffer_pool_size = ${BUFFER_POOL}
 innodb_flush_log_at_trx_commit = 2
 innodb_flush_method = O_DIRECT

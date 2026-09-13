@@ -3,7 +3,7 @@
 # Cipi — Self-Update
 #############################################
 
-readonly _CIPI_REPO="cipi-sh/cipi"
+readonly _CIPI_REPO="dink/cipi-mysql"
 readonly _CIPI_SELFUPDATE_BACKUP_KEEP=7
 
 _selfupdate_prune_backups() {
@@ -233,7 +233,7 @@ selfupdate_command() {
     if [[ "$version_changed" == true ]]; then
         cipi_notify \
             "Cipi updated to v${nv} on $(hostname)" \
-            "Cipi updated itself.\n\nServer: $(hostname)\nVersion: v${old_ver} → v${nv}\nTime: $(date '+%Y-%m-%d %H:%M:%S %Z')\n\nChangelog: https://github.com/cipi-sh/cipi/blob/master/CHANGELOG.md\n\nTurn this off with: cipi notifications disable self_update" \
+            "Cipi updated itself.\n\nServer: $(hostname)\nVersion: v${old_ver} → v${nv}\nTime: $(date '+%Y-%m-%d %H:%M:%S %Z')\n\nChangelog: https://github.com/dink/cipi-mysql/blob/master/CHANGELOG.md\n\nTurn this off with: cipi notifications disable self_update" \
             self_update
     fi
     success "Updated to v${nv}"
