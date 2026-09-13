@@ -1,16 +1,16 @@
 #!/bin/bash
 
 #############################################
-# Cipi Installer
+# Cipi Installer (MySQL Edition)
 # Version: see version.md
-# Author: Andrea Pollastri
+# Author: Andrea Pollastri / dink
 # License: MIT
 #############################################
 
 set -e
 set -o pipefail
 
-REPO="cipi-sh/cipi"
+REPO="dink/cipi-mysql"
 BRANCH="${1:-latest}"
 BUILD=""  # resolved from version.md after git clone in install_cipi()
 
@@ -61,7 +61,7 @@ show_logo() {
     echo "██      ██ ██      ██"
     echo " ██████ ██ ██      ██"
     echo ""
-    echo " v${BUILD} — Installation"
+    echo " v${BUILD} — Installation (MySQL Edition)"
     echo -e "${NC}"
     sleep 2
 }
@@ -128,7 +128,7 @@ _cipi_sanitize_known_broken_apt_sources() {
     cn="$(lsb_release -cs 2>/dev/null || true)"
     case "$cn" in
         resolute|questing)
-            rm -f /etc/apt/sources.list.d/mariadb.list
+            rm -f /etc/apt/sources.list.d/mysql.list /etc/apt/sources.list.d/mariadb.list
             rm -f /etc/apt/sources.list.d/ondrej-ubuntu-php*.list \
                   /etc/apt/sources.list.d/ondrej-ubuntu-php*.sources 2>/dev/null || true
             ;;
@@ -202,7 +202,7 @@ EOF
 ██      ██ ██      ██
  ██████ ██ ██      ██
 
-Easy Laravel Deployments
+Easy Laravel Deployments (MySQL)
 
 EOF
 
@@ -307,9 +307,6 @@ setup_ssh() {
     chown -R cipi:cipi /home/cipi/.ssh
 
     # 4. Allow cipi to run cipi CLI as root without password
-    # SSH_CLIENT/SSH_CONNECTION survive sudo so `cipi crowdsec enable` can
-    # allowlist the session it is typed from. Without them PermitRootLogin=no
-    # plus `sudo cipi` means the operator's own IP is never allowlisted.
     cat > /etc/sudoers.d/cipi-sudo <<'SUDOEOF'
 Defaults:cipi env_keep += "SSH_USER_AUTH SSH_CLIENT SSH_CONNECTION"
 cipi ALL=(root) NOPASSWD: /usr/local/bin/cipi *
@@ -373,11 +370,6 @@ install_nginx() {
     cat > /etc/nginx/nginx.conf <<NGINXEOF
 user www-data;
 worker_processes ${CPU_CORES};
-# Headroom for long-lived connections: a WebSocket holds two nginx connections
-# (browser side and upstream side) and a descriptor each for as long as it is
-# open, and the stock 1024 soft limit caps a Reverb app at a few hundred
-# clients. See _ensure_nginx_ws_limits in lib/common.sh, which applies the same
-# two values to servers installed before this was the default.
 worker_rlimit_nofile 65535;
 pid /run/nginx.pid;
 include /etc/nginx/modules-enabled/*.conf;
@@ -431,7 +423,6 @@ server {
     server_name _;
     server_tokens off;
 
-    # All requests serve the Server Up page (no 404 leaks)
     location / {
         rewrite ^ /index.html break;
     }
@@ -527,15 +518,7 @@ EOF
     ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
     rm -f /etc/nginx/sites-enabled/default.bak
 
-    # Catch-all for HTTPS. The "default" site above claims :80, but :443 had no
-    # default server: an HTTPS request carrying a Host that matches no app fell
-    # through to whichever vhost nginx loaded first. With a wildcard
-    # multi-tenant app that means its tenant resolver receives a hostname it
-    # cannot parse. Close those connections instead (cipi nginx default-server).
     cat > /etc/nginx/sites-available/000-cipi-default <<'EOF'
-# Managed by Cipi — catch-all for requests matching no app.
-# Disable with: cipi nginx default-server off
-
 server {
     listen 443 ssl default_server;
     listen [::]:443 ssl default_server;
@@ -600,29 +583,22 @@ EOF
     echo -e "${GREEN}✓ Firewall & fail2ban${NC}"
 }
 
-# ── MARIADB ───────────────────────────────────────────────────
+# ── MYSQL 8.0 ─────────────────────────────────────────────────
 
-install_mariadb() {
-    step_msg "Installing MariaDB..."
+install_mysql() {
+    step_msg "Installing Oracle MySQL Server..."
 
-    local mariadb_label="Ubuntu archive"
-    _cipi_source_apt_helpers && cipi_sanitize_broken_apt_sources 2>/dev/null || _cipi_sanitize_known_broken_apt_sources
-    if _cipi_source_apt_helpers && mariadb_setup_apt_repo; then
-        mariadb_label="MariaDB.org 11.4"
-    else
-        rm -f /etc/apt/sources.list.d/mariadb.list
-    fi
-
+    _cipi_sanitize_known_broken_apt_sources
     _cipi_apt_update -qq
-    _cipi_apt_install -y -qq mariadb-server mariadb-client
+    _cipi_apt_install -y -qq mysql-server mysql-client
 
     # Generate root password
     local DB_ROOT_PASS
     DB_ROOT_PASS=$(openssl rand -base64 64 | tr -dc 'a-zA-Z0-9' | head -c 40)
 
-    # Secure installation
-    mysql <<SQL
-ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_ROOT_PASS}';
+    # Secure installation & configure root authentication for MySQL 8
+    mysql --protocol=socket -u root <<SQL
+ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '${DB_ROOT_PASS}';
 DELETE FROM mysql.user WHERE User='';
 DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
 DROP DATABASE IF EXISTS test;
@@ -639,21 +615,20 @@ SQL
     [ "$RAM_MB" -ge 8192 ] && BUFFER_POOL="2G"
     [ "$RAM_MB" -ge 16384 ] && BUFFER_POOL="4G"
 
-    cat > /etc/mysql/mariadb.conf.d/99-cipi.cnf <<CNFEOF
+    cat > /etc/mysql/mysql.conf.d/99-cipi.cnf <<CNFEOF
 [mysqld]
 bind-address = 127.0.0.1
 innodb_buffer_pool_size = ${BUFFER_POOL}
-innodb_log_file_size = 256M
 innodb_flush_log_at_trx_commit = 2
 innodb_flush_method = O_DIRECT
 max_connections = 100
 character-set-server = utf8mb4
-collation-server = utf8mb4_unicode_ci
+collation-server = utf8mb4_0900_ai_ci
 skip-name-resolve
 CNFEOF
 
-    systemctl restart mariadb
-    systemctl enable mariadb
+    systemctl restart mysql
+    systemctl enable mysql
 
     # Save config (merge with existing server.json to preserve root_password)
     mkdir -p /etc/cipi
@@ -664,31 +639,26 @@ CNFEOF
     jq --arg p "$DB_ROOT_PASS" '
         . + {
             db_root_password: $p,
-            db_default_engine: "mariadb",
-            db_engines: ((.db_engines // {}) + {mariadb: {installed: true, port: 3306}})
+            db_default_engine: "mysql",
+            db_engines: ((.db_engines // {}) + {mysql: {installed: true, port: 3306}})
         }
     ' /etc/cipi/server.json > "$tmp"
     mv "$tmp" /etc/cipi/server.json
     chmod 600 /etc/cipi/server.json
 
-    echo -e "${GREEN}✓ MariaDB (${mariadb_label}, buffer_pool: ${BUFFER_POOL})${NC}"
+    echo -e "${GREEN}✓ MySQL 8.0 (buffer_pool: ${BUFFER_POOL})${NC}"
 }
 
 # ── VALKEY ──────────────────────────────────────────────────
-# Valkey is a Redis-compatible (RESP, same config directives, port 6379) fork
-# shipped in Ubuntu 24.04 Universe (`valkey` + `valkey-tools`). Apps keep using
-# the phpredis extension and REDIS_* .env settings unchanged.
 
 install_valkey() {
     step_msg "Installing Valkey..."
 
     _cipi_apt_install -y -qq valkey-server valkey-tools
 
-    # Generate password
     local VALKEY_PASS
     VALKEY_PASS=$(openssl rand -base64 64 | tr -dc 'a-zA-Z0-9' | head -c 40)
 
-    # Configure requirepass and bind to localhost
     if grep -q "^# *requirepass" /etc/valkey/valkey.conf; then
         sed -i "s/^# *requirepass.*/requirepass ${VALKEY_PASS}/" /etc/valkey/valkey.conf
     elif grep -q "^requirepass" /etc/valkey/valkey.conf; then
@@ -697,7 +667,6 @@ install_valkey() {
         echo "requirepass ${VALKEY_PASS}" >> /etc/valkey/valkey.conf
     fi
 
-    # Ensure bind to localhost only
     if grep -q "^bind " /etc/valkey/valkey.conf; then
         sed -i "s/^bind .*/bind 127.0.0.1 -::1/" /etc/valkey/valkey.conf
     elif ! grep -q "^bind " /etc/valkey/valkey.conf; then
@@ -707,7 +676,6 @@ install_valkey() {
     systemctl restart valkey-server
     systemctl enable valkey-server
 
-    # Save Valkey credentials in server.json (merge with existing)
     local tmp
     tmp=$(mktemp)
     jq --arg u "default" --arg p "$VALKEY_PASS" '. + {valkey_user: $u, valkey_password: $p}' /etc/cipi/server.json > "$tmp"
@@ -743,7 +711,6 @@ install_php() {
         done
         _cipi_apt_install -y -qq $PACKAGES
 
-        # Cipi defaults
         cat > "/etc/php/${VER}/fpm/conf.d/99-cipi.ini" <<INIEOF
 memory_limit = 256M
 upload_max_filesize = 256M
@@ -753,7 +720,6 @@ max_input_time = 300
 expose_php = Off
 INIEOF
 
-        # Replace default www pool with a minimal placeholder so FPM can start
         cat > "/etc/php/${VER}/fpm/pool.d/www.conf" <<POOLEOF
 [www]
 user = www-data
@@ -770,7 +736,6 @@ POOLEOF
         systemctl enable "php${VER}-fpm"
     done
 
-    # Set 8.5 as default CLI
     update-alternatives --set php /usr/bin/php8.5 2>/dev/null || true
 
     echo -e "${GREEN}✓ PHP 8.5${NC}"
@@ -785,8 +750,6 @@ install_composer() {
 
     curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer --quiet
 
-    # The installer ships the current stable build, but guard the floor so
-    # fresh installs never end up below the supported Composer release.
     local cv
     cv="$(composer --version --no-ansi 2>/dev/null | sed -n 's/.*Composer version \([0-9][0-9.]*\).*/\1/p' | head -1)"
     if [[ -z "$cv" ]] || [[ "$(printf '%s\n' "$COMPOSER_MIN" "$cv" | sort -V | head -1)" != "$COMPOSER_MIN" ]]; then
@@ -829,16 +792,8 @@ install_supervisor() {
 
     _cipi_apt_install -y -qq supervisor
 
-    # Every program Supervisor runs inherits its file-descriptor limit, and a
-    # WebSocket server spends one descriptor per connected client — systemd's
-    # default of 1024 would stop Reverb at around a thousand. A drop-in rather
-    # than supervisord's own `minfds`, which makes supervisord refuse to start
-    # when the limit cannot be reached and would take every queue worker on the
-    # box down with it. Written before the first start, so it applies at once.
     mkdir -p /etc/systemd/system/supervisor.service.d
     cat > /etc/systemd/system/supervisor.service.d/cipi-nofile.conf <<'SUPEOF'
-# Managed by Cipi — file-descriptor headroom for long-lived connections.
-# One descriptor per open WebSocket; supervisord's children inherit this.
 [Service]
 LimitNOFILE=65535
 SUPEOF
@@ -887,36 +842,27 @@ install_cipi() {
     cp cipi-install/lib/gui-reset-admin.php /opt/cipi/lib/ 2>/dev/null || true
     chmod 644 /opt/cipi/lib/gui-reset-admin.php 2>/dev/null || true
 
-    # Deployer templates (per app type: laravel, custom)
     if [ -d "cipi-install/lib/deployer" ]; then
         cp -r cipi-install/lib/deployer /opt/cipi/lib/
     fi
 
-    # Cipi API package (for cipi api)
     if [ -d "cipi-install/cipi-api" ]; then
         rm -rf /opt/cipi/cipi-api 2>/dev/null
         cp -a cipi-install/cipi-api /opt/cipi/cipi-api
     fi
 
-    # Cipi GUI is installed via Composer from https://github.com/cipi-sh/gui (cipi gui)
-
-    # Worker helper
     cp cipi-install/lib/cipi-worker.sh /usr/local/bin/cipi-worker
     chmod 700 /usr/local/bin/cipi-worker
 
-    # Cron notification wrapper
     cp cipi-install/lib/cipi-cron-notify.sh /usr/local/bin/cipi-cron-notify
     chmod 700 /usr/local/bin/cipi-cron-notify
 
-    # PAM auth notification script
     cp cipi-install/lib/cipi-auth-notify.sh /usr/local/bin/cipi-auth-notify
     chmod 700 /usr/local/bin/cipi-auth-notify
 
-    # App-level failure notification (called by app users via sudo)
     cp cipi-install/lib/cipi-app-notify.sh /usr/local/bin/cipi-app-notify
     chmod 700 /usr/local/bin/cipi-app-notify
 
-    # Automatic (webhook) deploy wrapper — runs as the app user from its crontab
     cp cipi-install/lib/cipi-app-deploy.sh /usr/local/bin/cipi-app-deploy
     chmod 755 /usr/local/bin/cipi-app-deploy
     cp cipi-install/lib/cipi-app-post-deploy.sh /usr/local/bin/cipi-app-post-deploy
@@ -925,13 +871,11 @@ install_cipi() {
     cp cipi-install/lib/cipi-read-app-logs.sh /usr/local/bin/cipi-read-app-logs
     chmod 755 /usr/local/bin/cipi-read-app-logs
 
-    # HTTP healthcheck cron helper
     cp cipi-install/lib/cipi-health-check.sh /usr/local/bin/cipi-health-check
     chmod 700 /usr/local/bin/cipi-health-check
     cp cipi-install/lib/cipi-scan-manifest.sh /usr/local/bin/cipi-scan-manifest
     chmod 755 /usr/local/bin/cipi-scan-manifest
-    # Integrity baselines live outside /home/<app>, root-only: the app user must
-    # not be able to rewrite the manifest it is checked against.
+
     install -d -m 700 -o root -g root /var/lib/cipi/manifests
     cp cipi-install/lib/cipi-crowdsec-rescue.py /usr/local/bin/cipi-crowdsec-rescue
     chmod 700 /usr/local/bin/cipi-crowdsec-rescue
@@ -940,65 +884,50 @@ install_cipi() {
     mkdir -p /var/log/cipi/health
     if [ ! -f /etc/cron.d/cipi-health ]; then
         cat > /etc/cron.d/cipi-health <<'EOF'
-# Cipi app HTTP healthchecks (every 5 minutes)
 */5 * * * * root /usr/local/bin/cipi-health-check >/dev/null 2>&1
 EOF
         chmod 644 /etc/cron.d/cipi-health
     fi
 
-    # System monitor (disk, SSL expiry, services, workers, 5xx, fs, load).
-    # On by default like the healthchecks; `cipi monitor disable <check>` opts out.
     cp cipi-install/lib/cipi-monitor.sh /usr/local/bin/cipi-monitor
     chmod 755 /usr/local/bin/cipi-monitor
     mkdir -p /var/log/cipi/monitor
     if [ ! -f /etc/cron.d/cipi-monitor ]; then
         cat > /etc/cron.d/cipi-monitor <<'EOF'
-# Cipi system monitor (every 5 minutes)
 */5 * * * * root /usr/local/bin/cipi-monitor >/dev/null 2>&1
 EOF
         chmod 644 /etc/cron.d/cipi-monitor
     fi
 
-    # Templates (if any)
     cp cipi-install/templates/* /opt/cipi/templates/ 2>/dev/null || true
 
     chown -R root:root /usr/local/bin/cipi /usr/local/bin/cipi-worker /usr/local/bin/cipi-cron-notify /usr/local/bin/cipi-auth-notify /usr/local/bin/cipi-app-notify /usr/local/bin/cipi-app-deploy /usr/local/bin/cipi-app-post-deploy /usr/local/bin/cipi-read-app-logs /usr/local/bin/cipi-health-check /usr/local/bin/cipi-monitor /usr/local/bin/cipi-scan-manifest /usr/local/bin/cipi-crowdsec-rescue /usr/local/bin/cipi-crowdsec-rescue-hole /opt/cipi
 
-    # Shell tab-completion — installed for every shell, no activation needed:
-    # /etc/bash_completion.d/cipi, the zsh vendor file, and an /etc/profile.d
-    # loader that works even without the bash-completion package.
     if [ -f /opt/cipi/lib/completion.sh ]; then
         # shellcheck source=/dev/null
         . /opt/cipi/lib/completion.sh
         _completion_install_system || true
     fi
 
-    # Generate vault key for config encryption
     if [ ! -f /etc/cipi/.vault_key ]; then
         openssl rand -base64 32 > /etc/cipi/.vault_key
         chmod 400 /etc/cipi/.vault_key
     fi
 
-    # Source vault functions now that lib is installed
     source "${CIPI_LIB}/vault.sh"
 
-    # Init config files (encrypted)
     for f in apps.json databases.json; do
         if [ ! -f "/etc/cipi/$f" ]; then
             echo "{}" | vault_write "$f"
         fi
     done
 
-    # Seal any config files written in plaintext earlier in setup
     for f in server.json; do
         [ -f "/etc/cipi/$f" ] && vault_seal "$f"
     done
 
-    # Version
     echo "$BUILD" > /etc/cipi/version
 
-    # Sudoers for API (www-data runs cipi via sudo — restricted to API commands only)
-    # shellcheck source=/dev/null
     source "${CIPI_LIB}/cipi-api-sudoers.sh"
     write_cipi_api_sudoers
 
@@ -1010,7 +939,6 @@ EOF
 # ── PAM AUTH NOTIFICATIONS ────────────────────────────────────
 
 setup_pam() {
-    # Restrict su to sudo group members only (blocks app users from su to root/cipi)
     if ! grep -q '^auth\s\+required\s\+pam_wheel\.so' /etc/pam.d/su 2>/dev/null; then
         sed -i '/^#.*pam_wheel\.so/c\auth       required   pam_wheel.so group=sudo' /etc/pam.d/su \
             || echo 'auth       required   pam_wheel.so group=sudo' >> /etc/pam.d/su
@@ -1038,11 +966,6 @@ setup_cron() {
 
     mkdir -p /var/log/cipi
 
-    # Configure unattended-upgrades: security patches only.
-    # nginx / mariadb / postgresql / valkey / php stay off the automatic path
-    # (a database restart is not a 4am surprise). PHP has a weekly cron
-    # (`cipi php upgrade`); the others wait for `cipi nginx upgrade`,
-    # `cipi db upgrade`, `cipi service upgrade valkey`.
     cat > /etc/apt/apt.conf.d/50cipi-unattended-upgrades <<'UUEOF'
 Unattended-Upgrade::Allowed-Origins {
     "${distro_id}:${distro_codename}-security";
@@ -1054,6 +977,9 @@ Unattended-Upgrade::Package-Blacklist {
     "nginx-core";
     "nginx-full";
     "nginx-extras";
+    "mysql-server";
+    "mysql-client";
+    "mysql-common";
     "mariadb-server";
     "mariadb-client";
     "mariadb-common";
@@ -1076,7 +1002,6 @@ Dpkg::Options {
 };
 UUEOF
 
-    # Enable periodic security updates
     cat > /etc/apt/apt.conf.d/20cipi-auto-upgrades <<'AUEOF'
 APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
@@ -1085,25 +1010,15 @@ AUEOF
 
     (crontab -l 2>/dev/null | grep -v "CIPI" || true; cat <<'CRONEOF'
 # === CIPI CRON JOBS ===
-# Cipi self-update (daily 3:50 AM)
 50 3 * * * /usr/local/bin/cipi-cron-notify self-update /usr/local/bin/cipi self-update >> /var/log/cipi/cipi.log 2>&1
-# PHP security patch check (Sunday 3:30 AM)
 30 3 * * 0 /usr/local/bin/cipi-cron-notify php-upgrade /usr/local/bin/cipi php upgrade >> /var/log/cipi/php-upgrade.log 2>&1
-# SSL renewal (Sunday 4 AM)
 10 4 * * 0 /usr/local/bin/cipi-cron-notify ssl-renew certbot renew --nginx --non-interactive --post-hook "systemctl reload nginx" >> /var/log/cipi/certbot.log 2>&1
-# Security updates — unattended-upgrades handles this daily via APT::Periodic
-# Stack patches (nginx / MariaDB / PostgreSQL / Valkey): no cron — run
-#   cipi nginx upgrade / cipi db upgrade / cipi service upgrade valkey
-# Weekly apt cache cleanup (Sunday 5 AM)
 0 5 * * 0 apt-get clean && apt-get autoclean >> /var/log/cipi/updates.log 2>&1
-# Clear RAM cache (daily 5:50 AM)
 50 5 * * * echo 3 > /proc/sys/vm/drop_caches && swapoff -a && swapon -a 2>/dev/null
 CRONEOF
     ) | crontab -
 
-    # ── GDPR-compliant log rotation ──
-
-    # Application logs (Laravel, PHP-FPM, workers, deploy) — 12 months
+    # Application logs
     cat > /etc/logrotate.d/cipi-app-logs <<'EOF'
 /home/*/shared/storage/logs/*.log
 /home/*/logs/php-fpm-*.log
@@ -1121,7 +1036,7 @@ CRONEOF
 }
 EOF
 
-    # HTTP / Navigation logs (nginx access & error) — 90 days
+    # HTTP logs
     cat > /etc/logrotate.d/cipi-http-logs <<'EOF'
 /home/*/logs/nginx-access.log
 /home/*/logs/nginx-error.log
@@ -1140,7 +1055,7 @@ EOF
 }
 EOF
 
-    # Security logs (firewall, fail2ban, auth) — 12 months
+    # Security logs
     cat > /etc/logrotate.d/cipi-security-logs <<'EOF'
 /var/log/fail2ban.log {
     daily
@@ -1180,7 +1095,6 @@ EOF
 }
 EOF
 
-    # Remove conflicting system logrotate configs
     rm -f /etc/logrotate.d/cipi-apps
     rm -f /etc/logrotate.d/nginx
     rm -f /etc/logrotate.d/fail2ban
@@ -1205,14 +1119,14 @@ final_summary() {
 
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo -e "  ${GREEN}${BOLD}CIPI v${BUILD} INSTALLED SUCCESSFULLY${NC}"
+    echo -e "  ${GREEN}${BOLD}CIPI v${BUILD} (MySQL) INSTALLED SUCCESSFULLY${NC}"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
     echo -e "  ${BOLD}Server${NC}"
     echo -e "  IP:             ${CYAN}${SERVER_IP}${NC}"
     echo -e "  OS:             ${CYAN}Ubuntu $(lsb_release -rs)${NC}"
     echo ""
-    echo -e "  ${BOLD}MariaDB Root${NC}"
+    echo -e "  ${BOLD}MySQL Root${NC}"
     echo -e "  User:           ${CYAN}root${NC}"
     echo -e "  Password:       ${CYAN}${DB_ROOT_PASS}${NC}"
     echo ""
@@ -1250,7 +1164,6 @@ final_summary() {
     echo ""
 }
 
-# Post-setup guide: optional Panel API and Web GUI (same server or remote).
 _final_summary_panel_guide() {
     local server_ip="${1:-}"
 
@@ -1286,7 +1199,6 @@ _final_summary_panel_guide() {
 # ── MAIN ──────────────────────────────────────────────────────
 
 main() {
-    # Fetch version early for logo display
     BUILD=$(curl -fsSL "https://raw.githubusercontent.com/${REPO}/refs/heads/${BRANCH}/version.md" 2>/dev/null | tr -d '[:space:]')
     [[ -z "$BUILD" ]] && BUILD="?"
 
@@ -1299,7 +1211,7 @@ main() {
     setup_ssh
     install_nginx
     install_firewall
-    install_mariadb
+    install_mysql
     install_php
     install_composer
     install_deployer
