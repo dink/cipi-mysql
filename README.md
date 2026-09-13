@@ -22,7 +22,7 @@ No web panel. No bloat. No sleepless nights fighting Nginx configs or PHP-FPM po
 Just SSH and the `cipi` command.
 
 ```bash
-wget -O - https://cipi.sh/setup.sh | bash
+wget -O - https://raw.githubusercontent.com/dink/cipi-mysql/master/setup.sh | bash
 ```
 
 > Run this **on the server**, over SSH — not on your own machine — as a user with `sudo`.
@@ -37,7 +37,7 @@ wget -O - https://cipi.sh/setup.sh | bash
 SSH into the server first and run it there, as a user with `sudo`:
 
 ```bash
-wget -O - https://cipi.sh/setup.sh | bash
+wget -O - https://raw.githubusercontent.com/dink/cipi-mysql/master/setup.sh | bash
 ```
 
 The installer asks for the **public** half of an SSH key (`~/.ssh/id_ed25519.pub`
