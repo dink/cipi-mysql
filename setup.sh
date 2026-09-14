@@ -546,8 +546,11 @@ install_firewall() {
 
     _cipi_apt_install -y -qq fail2ban ufw
 
-    cat > /etc/fail2ban/jail.local <<'EOF'
+    local IGNORE_IPS="127.0.0.1/8 ::1 ${FAIL2BAN_IGNORE_IP:-}"
+
+    cat > /etc/fail2ban/jail.local <<EOF
 [DEFAULT]
+ignoreip = ${IGNORE_IPS}
 bantime = 86400
 findtime = 3600
 maxretry = 3
